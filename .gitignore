@@ -1,0 +1,35 @@
+# secrets
+.env
+*.env
+llm_finetune/
+
+# model weights (too large for GitHub — use HuggingFace Hub)
+outputs/
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# data (download via script)
+data/raw/
+data/cleaned/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# notebooks checkpoints
+.ipynb_checkpoints/
+
+# wandb
+wandb/
+
+# misc
+.DS_Store
+*.log
+feedback_log.jsonl

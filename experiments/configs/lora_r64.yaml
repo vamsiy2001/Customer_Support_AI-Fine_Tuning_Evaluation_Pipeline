@@ -1,0 +1,55 @@
+experiment_name: "customer-support-lora-r64"
+run_description: "Higher rank LoRA — tests capacity vs r=16"
+
+model:
+  name: "unsloth/Llama-3.2-3B-Instruct"
+  load_in_4bit: true
+  max_seq_length: 2048
+  dtype: null
+
+lora:
+  r: 64
+  lora_alpha: 64
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  lora_dropout: 0.05
+  bias: "none"
+  use_gradient_checkpointing: "unsloth"
+  use_rslora: true   # RSLoRA helps stability at higher ranks
+
+training:
+  dataset_path: "data/cleaned/customer_support_dataset"
+  output_dir: "./outputs/lora_r64"
+  num_train_epochs: 1
+  max_steps: 200
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4
+  warmup_steps: 10
+  learning_rate: 1.0e-4   # lower LR for higher rank
+  fp16: false
+  bf16: false
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 50
+  evaluation_strategy: "steps"
+  seed: 42
+  optim: "adamw_8bit"
+  weight_decay: 0.01
+  lr_scheduler_type: "cosine"
+  report_to: "wandb"
+
+wandb:
+  project: "llm-finetuning-customer-support"
+  entity: null
+  tags:
+    - "llama-3.2-3B"
+    - "lora"
+    - "customer-support"
+    - "r64"
+    - "rslora"
