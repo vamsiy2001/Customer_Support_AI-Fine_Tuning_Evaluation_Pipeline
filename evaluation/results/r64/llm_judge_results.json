@@ -1,0 +1,22 @@
+{
+  "judge_model": "llama-3.3-70b-versatile",
+  "n_samples": 50,
+  "base_model": {
+    "avg_helpfulness": 3.88,
+    "avg_accuracy": 4.18,
+    "avg_professionalism": 5.0,
+    "avg_composite": 4.353,
+    "n_valid": 50,
+    "n_failed": 0
+  },
+  "finetuned_model": {
+    "avg_helpfulness": 4.12,
+    "avg_accuracy": 4.08,
+    "avg_professionalism": 5.0,
+    "avg_composite": 4.4,
+    "n_valid": 50,
+    "n_failed": 0
+  },
+  "preference_win_rate_finetuned": 0.44,
+  "preference_win_rate_base": 0.56
+}

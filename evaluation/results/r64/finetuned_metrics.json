@@ -1,0 +1,15 @@
+{
+  "label": "Fine-tuned LoRA r64",
+  "model_path": "Fine-tuned LoRA r64",
+  "n_samples": 100,
+  "bleu": 0.2705,
+  "rouge1": 0.5283,
+  "rouge2": 0.2838,
+  "rougeL": 0.3847,
+  "rougeLsum": 0.3858,
+  "avg_pred_length": 91.1,
+  "avg_ref_length": 105.2,
+  "length_ratio": 0.866,
+  "avg_latency_ms": 6440.9,
+  "p95_latency_ms": 10835.7
+}

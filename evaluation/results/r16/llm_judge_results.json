@@ -3,9 +3,9 @@
   "n_samples": 20,
   "base_model": {
     "avg_helpfulness": 4.1,
-    "avg_accuracy": 4.35,
+    "avg_accuracy": 4.3,
     "avg_professionalism": 5.0,
-    "avg_composite": 4.483,
+    "avg_composite": 4.467,
     "n_valid": 20,
     "n_failed": 0
   },
@@ -17,6 +17,6 @@
     "n_valid": 20,
     "n_failed": 0
   },
-  "preference_win_rate_finetuned": 0.1,
-  "preference_win_rate_base": 0.9
+  "preference_win_rate_finetuned": 0.15,
+  "preference_win_rate_base": 0.85
 }

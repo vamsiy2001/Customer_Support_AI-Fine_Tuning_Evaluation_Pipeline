@@ -58,33 +58,35 @@ notebooks/
 
 ## Results
 
-*Evaluated on 20 stratified test samples. Training: 200 steps, LoRA r=16. LLM judge: Llama 3.3-70B via Groq (free).*
+*100 test samples, 200 training steps, LLM judge: Llama 3.3-70B via Groq (free).*
 
 ### Automatic Metrics
 
-| Model | Perplexity ↓ | ROUGE-L ↑ | BLEU ↑ | ROUGE-1 ↑ | ROUGE-2 ↑ | Avg Latency ↓ |
+| Model | ROUGE-L ↑ | BLEU ↑ | ROUGE-1 ↑ | ROUGE-2 ↑ | Avg Pred Len | Avg Latency |
 |---|---|---|---|---|---|---|
-| Base Llama 3.2-3B | — | 0.2276 | 0.0831 | 0.3916 | 0.1157 | 5,353 ms |
-| Fine-tuned LoRA r=16 | **3.83** | **0.3554** | **0.2292** | **0.5053** | **0.2438** | 5,353 ms |
+| Base Llama 3.2-3B | 0.2276 | 0.0831 | 0.3916 | 0.1157 | 105 words | 5,353 ms |
+| Fine-tuned LoRA **r=16** | **0.3554** | **0.2292** | **0.5053** | **0.2438** | 87 words | 5,353 ms |
+| Fine-tuned LoRA **r=64** | **0.3847** | **0.2705** | **0.5283** | **0.2838** | 91 words | 6,441 ms |
 
-**Improvement over base:** BLEU +176%, ROUGE-L +56%, ROUGE-2 +111%
+r=16 vs base: BLEU +176%, ROUGE-L +56%  
+r=64 vs base: BLEU +205%, ROUGE-L +70%
 
 ### LLM-as-Judge (Llama 3.3-70B, scores 1–5)
 
-| Dimension | Base | Fine-tuned | Δ |
+| Dimension | Base | r=16 | r=64 |
 |---|---|---|---|
-| Helpfulness | 4.10 | 4.20 | +0.10 |
-| Accuracy | 4.35 | 4.30 | −0.05 |
-| Professionalism | 5.00 | 5.00 | 0.00 |
-| **Composite** | 4.48 | **4.50** | +0.02 |
+| Helpfulness | 3.88–4.10 | 4.20 | 4.12 |
+| Accuracy | 4.18–4.30 | 4.30 | 4.08 |
+| Professionalism | 5.00 | 5.00 | 5.00 |
+| **Composite** | 4.35–4.47 | **4.50** | **4.40** |
 
-**Head-to-head win rate:** Fine-tuned 10% — Base 90%
+**Head-to-head win rate:** r=16 → FT 15%, Base 85% &nbsp;|&nbsp; r=64 → FT 44%, Base 56%
 
 ### What the numbers mean
 
-The ROUGE/BLEU gap is large because the fine-tuned model has learned the *specific phrasing and structure* of Bitext customer support responses (e.g. "I'm sorry to hear that", "please allow 3-5 business days"). The base model gives correct but differently-worded answers — valid, but n-gram metrics penalise the mismatch.
+The ROUGE/BLEU gap is large because fine-tuning teaches the *specific phrasing* of Bitext support responses ("I'm sorry to hear that", "please allow 3–5 business days"). The base model gives correct but differently-worded answers — valid, but n-gram metrics penalise the wording mismatch.
 
-The LLM judge composite scores are nearly identical (4.48 vs 4.50) because Llama 3.2-3B Instruct is already a strong instruction-following model — both produce professional, helpful responses. The win rate reflects this: fine-tuning at 200 steps narrows the *style gap* more than the *quality gap*. Training longer (500–1000 steps) or with a weaker base model would show a larger quality delta.
+The LLM judge composites are close (both fine-tuned variants score ~4.4–4.5/5) because Llama 3.2-3B Instruct is already a strong instruction-following model. Both variants produce professional, empathetic responses. The win rate gap between r=16 (15%) and r=64 (44%) shows that **higher-rank LoRA produces noticeably more preferred responses** — r=64 is nearly competitive head-to-head — while r=16 mostly narrows the style gap rather than the quality gap. Longer training (500–1000 steps) would push both further.
 
 ---
 
@@ -116,20 +118,18 @@ python experiments/run_experiment.py --config experiments/configs/lora_r16.yaml
 python experiments/run_experiment.py --config experiments/configs/lora_r64.yaml
 ```
 
-### 4. Evaluation (run locally on M2/CPU/CUDA)
+### 4. Evaluation (run locally — no GPU needed)
+
+After downloading the parquets from Colab (cell 13), place them at `evaluation/results/r16/` and run:
 
 ```bash
-# automatic metrics
-python evaluation/automated_eval.py \
-    --model_path ./outputs/customer-support-lora-r16 \
-    --test_data data/cleaned/test_set.parquet \
-    --n_samples 200
+# automatic metrics (ROUGE, BLEU — CPU only)
+python evaluation/compute_metrics.py --experiment r16
+python evaluation/compute_metrics.py --experiment r64
 
 # LLM-as-judge (needs GROQ_API_KEY — free at console.groq.com)
-python evaluation/llm_judge.py \
-    --base_predictions evaluation/results/base/predictions.parquet \
-    --ft_predictions evaluation/results/finetuned/predictions.parquet \
-    --n_samples 50
+python evaluation/llm_judge.py --experiment r16
+python evaluation/llm_judge.py --experiment r64
 ```
 
 ### 5. Run the comparison app

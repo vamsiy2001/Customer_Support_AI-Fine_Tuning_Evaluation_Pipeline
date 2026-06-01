@@ -22,6 +22,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -71,32 +72,70 @@ Which response better resolves the customer's issue? Consider helpfulness, accur
 Return ONLY valid JSON: {{"winner": "A" or "B", "reasoning": "brief explanation"}}"""
 
 
+# ── rate-limit helpers ─────────────────────────────────────────────────────
+def _parse_retry_seconds(err_str: str) -> float | None:
+    """Extract wait seconds from Groq 429 message ('try again in 6m14.976s')."""
+    m = re.search(r"try again in\s+(?:(\d+)h\s*)?(?:(\d+)m\s*)?(\d+(?:\.\d+)?s)?", str(err_str))
+    if not m:
+        return None
+    hours   = int(m.group(1) or 0)
+    minutes = int(m.group(2) or 0)
+    secs    = float((m.group(3) or "0s").rstrip("s"))
+    return hours * 3600 + minutes * 60 + secs + 5  # +5 s buffer
+
+
+def _is_daily_limit(err_str: str) -> bool:
+    return "tokens per day" in str(err_str) or "TPD" in str(err_str)
+
+
+def _groq_call(fn, *args, retries: int = 4, **kwargs):
+    """Wrapper that retries Groq calls with smart rate-limit handling."""
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "rate_limit" in err.lower():
+                if _is_daily_limit(err):
+                    raise RuntimeError(
+                        "\n[bold red]Groq daily token limit reached (100K/day).[/bold red]\n"
+                        "Wait until midnight UTC, then re-run.\n"
+                        "Tip: use --n_samples 25 to keep each run under 50K tokens."
+                    ) from e
+                wait = _parse_retry_seconds(err) or (2 ** attempt * 10)
+                console.print(f"[yellow]Rate limit — sleeping {wait:.0f}s (attempt {attempt+1}/{retries})[/yellow]")
+                time.sleep(wait)
+            else:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
+    raise RuntimeError("Groq call failed after all retries")
+
+
 # ── rating functions ────────────────────────────────────────────────────────
 def rate_response(
     instruction: str,
     response: str,
     model: str = "llama-3.3-70b-versatile",
-    retries: int = 3,
 ) -> dict:
     """Rate a single response. Returns dict with scores or None on failure."""
     prompt = RATING_PROMPT.format(instruction=instruction, response=response)
-
-    for attempt in range(retries):
-        try:
-            result = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=200,
-                response_format={"type": "json_object"},
-            )
-            return json.loads(result.choices[0].message.content)
-        except Exception as e:
-            if attempt == retries - 1:
-                console.print(f"[red]Rating failed after {retries} attempts: {e}[/red]")
-                return {"helpfulness": None, "accuracy": None, "professionalism": None, "reasoning": "error"}
-            time.sleep(2 ** attempt)
-    return {"helpfulness": None, "accuracy": None, "professionalism": None, "reasoning": "error"}
+    try:
+        result = _groq_call(
+            client.chat.completions.create,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=200,
+            response_format={"type": "json_object"},
+        )
+        return json.loads(result.choices[0].message.content)
+    except RuntimeError as e:
+        console.print(str(e))
+        raise SystemExit(1) from e
+    except Exception as e:
+        console.print(f"[red]Rating failed: {e}[/red]")
+        return {"helpfulness": None, "accuracy": None, "professionalism": None, "reasoning": "error"}
 
 
 def judge_preference(
@@ -112,7 +151,8 @@ def judge_preference(
         response_b=response_b,
     )
     try:
-        result = client.chat.completions.create(
+        result = _groq_call(
+            client.chat.completions.create,
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
@@ -120,6 +160,9 @@ def judge_preference(
             response_format={"type": "json_object"},
         )
         return json.loads(result.choices[0].message.content)
+    except RuntimeError as e:
+        console.print(str(e))
+        raise SystemExit(1) from e
     except Exception as e:
         console.print(f"[red]Preference judgment failed: {e}[/red]")
         return {"winner": None, "reasoning": "error"}
@@ -162,10 +205,11 @@ def run_llm_judge(
     base_df = pd.read_parquet(base_pred_path)
     ft_df = pd.read_parquet(ft_pred_path)
 
-    # align on same sample
+    # align on same sample — capture index BEFORE reset so both dfs use the same rows
     if n_samples < len(base_df):
-        base_df = base_df.sample(n=n_samples, random_state=42).reset_index(drop=True)
-        ft_df = ft_df.loc[base_df.index].reset_index(drop=True)
+        sample_idx = base_df.sample(n=n_samples, random_state=42).index
+        base_df = base_df.loc[sample_idx].reset_index(drop=True)
+        ft_df = ft_df.loc[sample_idx].reset_index(drop=True)
 
     console.print(f"\nRunning LLM-as-Judge on {len(base_df)} samples with [cyan]{judge_model}[/cyan]")
     console.print("Cost: [green]$0.00[/green] (Groq free tier)\n")
