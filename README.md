@@ -95,7 +95,7 @@ The LLM judge composites are close (both fine-tuned variants score ~4.4–4.5/5)
 ### 1. Install
 
 ```bash
-git clone https://github.com/vamsiyvk/llm-finetuning-framework
+git clone https://github.com/vamsiy2001/Customer_Support_AI-Fine_Tuning_Evaluation_Pipeline
 cd llm-finetuning-framework
 pip install -r requirements.txt
 cp .env.example .env  # fill in your keys
@@ -180,4 +180,4 @@ FINETUNED_MODEL_ID=vamsiyvk/customer-support-lora-r16 python deployment/app.py
 
 ## Author
 
-Vamsi YVK — [GitHub](https://github.com/vamsiyvk) | [HuggingFace](https://huggingface.co/vamsiyvk) | [LinkedIn](https://linkedin.com/in/vamsiyvk)
+Vamsi YVK — [GitHub](https://github.com/vamsiy2001) | [HuggingFace](https://huggingface.co/vamsiyvk) | [LinkedIn](https://linkedin.com/in/vamsiyvk)
