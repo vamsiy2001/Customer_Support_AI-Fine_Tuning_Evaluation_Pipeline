@@ -1,253 +1,220 @@
 """
-Gradio Comparison App — deploy to HuggingFace Spaces.
+Customer Support LLM — HuggingFace Spaces demo.
+Shows pre-computed predictions (base vs fine-tuned) side by side.
+No GPU or model loading required — instant response.
 
-Features:
-  - Side-by-side: Base Llama 3.2 3B vs Fine-tuned (customer support)
-  - Live latency display per response
-  - User feedback collection (thumbs up/down + free text)
-  - Intent display from classification
-  - Example prompts from each category
-
-Deploy to HuggingFace Spaces:
-    1. Create a new Space (Gradio type)
-    2. Push this file + requirements.txt to the Space repo
-    3. Set env vars: HF_TOKEN, FINETUNED_MODEL_ID
+Deploy: push app.py + examples.json + requirements.txt to an HF Space (Gradio SDK).
+Generate examples.json locally first:
+    python deployment/prepare_examples.py
 """
 
 import json
-import os
-import time
-from datetime import datetime
+import random
 from pathlib import Path
 
 import gradio as gr
-import torch
-from dotenv import load_dotenv
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-load_dotenv()
+# ── load examples ──────────────────────────────────────────────────────────
+def _load_examples():
+    for p in ["examples.json", "deployment/examples.json"]:
+        if Path(p).exists():
+            with open(p) as f:
+                return json.load(f)
+    return []
 
-# ── config ────────────────────────────────────────────────────────────────
-BASE_MODEL_ID = "unsloth/Llama-3.2-3B-Instruct"
-FINETUNED_MODEL_ID = os.getenv(
-    "FINETUNED_MODEL_ID", "vamsiyvk/customer-support-lora-r16"
-)
-FEEDBACK_FILE = "feedback_log.jsonl"
-MAX_NEW_TOKENS = 256
+EXAMPLES  = _load_examples()
+INTENTS   = ["All intents"] + sorted({e["intent"]   for e in EXAMPLES})
+CATEGORIES = sorted({e["category"] for e in EXAMPLES})
 
-SYSTEM_PROMPT = (
-    "You are a helpful, professional customer support agent. "
-    "Respond clearly and empathetically to customer inquiries. "
-    "Be concise, accurate, and solution-focused."
-)
-
-EXAMPLE_PROMPTS = [
-    "I was charged twice for my last order. Can you help?",
-    "How do I return a product I bought last week?",
-    "My order hasn't arrived and it's been 2 weeks. Where is it?",
-    "I want to cancel my subscription but can't find the option.",
-    "Can I change the shipping address for an order I just placed?",
-    "My account got locked after too many login attempts. What do I do?",
-    "I received the wrong item in my order.",
-    "Do you offer price matching if I find a lower price elsewhere?",
-]
-
-# ── model loading ─────────────────────────────────────────────────────────
-def detect_device() -> str:
-    if torch.backends.mps.is_available():
-        return "mps"
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-def load_model(model_id: str, device: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    dtype = torch.float16 if device != "cpu" else torch.float32
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype)
-    model = model.to(device)
-    model.eval()
-    return model, tokenizer
-
-
-print(f"Loading models... (this takes 1-2 minutes on first launch)")
-DEVICE = detect_device()
-print(f"Device: {DEVICE}")
-
-base_model, base_tokenizer = load_model(BASE_MODEL_ID, DEVICE)
-ft_model, ft_tokenizer = load_model(FINETUNED_MODEL_ID, DEVICE)
-print("Models loaded.")
-
-
-# ── generation ────────────────────────────────────────────────────────────
-def generate(model, tokenizer, instruction: str) -> tuple[str, float]:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": instruction},
+# ── helpers ────────────────────────────────────────────────────────────────
+def pick(intent_filter: str):
+    pool = EXAMPLES if intent_filter == "All intents" else [
+        e for e in EXAMPLES if e["intent"] == intent_filter
     ]
-    try:
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    except Exception:
-        prompt = f"{SYSTEM_PROMPT}\n\nUser: {instruction}\nAssistant:"
-
-    inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
-    start = time.perf_counter()
-    with torch.no_grad():
-        out = model.generate(
-            **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-    latency_ms = (time.perf_counter() - start) * 1000
-    response = tokenizer.decode(
-        out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+    if not pool:
+        return ("", "", "", "", "")
+    ex = random.choice(pool)
+    badge = f"**Intent:** `{ex['intent']}`  ·  **Category:** `{ex['category']}`"
+    return (
+        ex["instruction"],
+        ex["base_prediction"],
+        ex["ft_prediction"],
+        ex["response"],
+        badge,
     )
-    return response.strip(), round(latency_ms, 1)
 
+# ── CSS ────────────────────────────────────────────────────────────────────
+CSS = """
+/* question */
+#question textarea {
+    border-left: 4px solid #3b82f6 !important;
+    background: #eff6ff !important;
+    font-size: 1.05em !important;
+}
+/* base model */
+#base-out textarea {
+    border-left: 4px solid #94a3b8 !important;
+    background: #f8fafc !important;
+}
+/* fine-tuned */
+#ft-out textarea {
+    border-left: 4px solid #22c55e !important;
+    background: #f0fdf4 !important;
+}
+/* reference */
+#ref-out textarea {
+    border-left: 4px solid #f59e0b !important;
+    background: #fffbeb !important;
+    font-size: 0.92em !important;
+}
+.badge { font-size: 0.9em; color: #475569; margin-top: 4px; }
+"""
 
-# ── feedback ──────────────────────────────────────────────────────────────
-def log_feedback(
-    instruction: str,
-    base_resp: str,
-    ft_resp: str,
-    preference: str,
-    comment: str,
-):
-    record = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "instruction": instruction,
-        "base_response": base_resp,
-        "finetuned_response": ft_resp,
-        "preference": preference,
-        "comment": comment,
-    }
-    with open(FEEDBACK_FILE, "a") as f:
-        f.write(json.dumps(record) + "\n")
-    return "✅ Feedback recorded. Thank you!"
+# ── metrics markdown ───────────────────────────────────────────────────────
+METRICS_MD = """
+## Automatic Metrics (100 test samples)
 
+| Metric | Base Llama 3.2-3B | Fine-tuned r=16 | Fine-tuned r=64 |
+|:---|---:|---:|---:|
+| BLEU ↑ | 0.0831 | 0.2292 · **+176%** | **0.2705 · +205%** |
+| ROUGE-L ↑ | 0.2276 | 0.3554 · **+56%** | **0.3847 · +70%** |
+| ROUGE-1 ↑ | 0.3916 | 0.5053 · **+29%** | **0.5283 · +35%** |
+| ROUGE-2 ↑ | 0.1157 | 0.2438 · **+111%** | **0.2838 · +145%** |
+| Avg response length | 105 words | 87 words | 91 words |
 
-# ── gradio interface ──────────────────────────────────────────────────────
-def compare(instruction: str):
-    if not instruction.strip():
-        return "Please enter a question.", "", "", ""
+## LLM-as-Judge (50 samples · Llama 3.3-70B via Groq · free)
 
-    base_resp, base_lat = generate(base_model, base_tokenizer, instruction)
-    ft_resp, ft_lat = generate(ft_model, ft_tokenizer, instruction)
+| Dimension (1–5) | Base | r=16 | r=64 |
+|:---|---:|---:|---:|
+| Helpfulness ↑ | 3.88–4.10 | **4.20** | 4.12 |
+| Accuracy ↑ | 4.18–4.30 | **4.30** | 4.08 |
+| Professionalism ↑ | 5.00 | 5.00 | 5.00 |
+| **Composite** ↑ | 4.35–4.47 | **4.50** | 4.40 |
+| Head-to-head win rate | — | 15% | **44%** |
 
-    base_with_meta = f"{base_resp}\n\n---\n⏱ {base_lat} ms"
-    ft_with_meta = f"{ft_resp}\n\n---\n⏱ {ft_lat} ms"
+## What the numbers mean
 
-    return base_resp, ft_resp, base_with_meta, ft_with_meta
+- **BLEU / ROUGE gap is large** because fine-tuning teaches the model the exact phrasing of the
+  training set ("please allow 3–5 business days", "I sincerely apologise"). The base model answers
+  correctly but in different words — valid, but n-gram metrics penalise the mismatch.
+- **Judge composite is close** because Llama 3.2-3B Instruct is already a strong instruction-following
+  model. Both produce professional, empathetic responses. Fine-tuning at 200 steps closes the *style*
+  gap more than the *quality* gap.
+- **r=64 win rate (44%) >> r=16 (15%)**: higher LoRA rank learns more of the domain vocabulary and
+  is nearly competitive head-to-head. 500+ training steps would likely push this above 50%.
+"""
 
+# ── about markdown ─────────────────────────────────────────────────────────
+ABOUT_MD = """
+## What was built
 
+A full **LLM fine-tuning + evaluation pipeline** on a real customer support dataset:
+
+```
+Data pipeline  →  27K Bitext conversations, cleaned + stratified 80/10/10 split
+Training       →  LoRA fine-tuning on Llama 3.2-3B (Unsloth + TRL, free Colab T4)
+Evaluation     →  ROUGE/BLEU (CPU) + LLM-as-judge via Groq (free tier)
+Demo           →  This Gradio app on HuggingFace Spaces
+```
+
+## Training details
+
+| Setting | r=16 | r=64 |
+|:---|:---|:---|
+| Base model | Llama 3.2-3B Instruct | same |
+| LoRA target modules | q/k/v/o · gate/up/down | same |
+| LoRA alpha | 16 | 64 |
+| Training steps | 200 | 200 |
+| Effective batch size | 8 (2 × 4 grad accum) | same |
+| Learning rate | 2e-4 cosine | 1e-4 cosine |
+| Quantization | 4-bit QLoRA | same |
+| GPU | Colab T4 (free) | same |
+| Training time | ~30 min | ~30 min |
+
+## Stack
+
+| Layer | Tool |
+|:---|:---|
+| Fine-tuning | Unsloth + LoRA + TRL SFTTrainer |
+| Experiment tracking | Weights & Biases |
+| Automatic metrics | HuggingFace `evaluate` (ROUGE, BLEU) |
+| LLM judge | Groq — Llama 3.3-70B (free tier) |
+| Demo | Gradio + HuggingFace Spaces |
+
+## Source
+
+[GitHub →](https://github.com/vamsiy2001/Customer_Support_AI-Fine_Tuning_Evaluation_Pipeline)
+"""
+
+# ── build UI ───────────────────────────────────────────────────────────────
 with gr.Blocks(
-    title="LLM Fine-Tuning: Customer Support Comparison",
+    title="Customer Support LLM — Base vs Fine-tuned",
     theme=gr.themes.Soft(),
+    css=CSS,
 ) as demo:
-    gr.Markdown(
-        """
-        # 🤖 LLM Fine-Tuning for Customer Support
-        **Base Llama 3.2-3B-Instruct** vs **Fine-tuned on 27K real customer support conversations**
-
-        Type a customer question and see how each model responds. Fine-tuned model was trained using LoRA
-        on the [Bitext Customer Support Dataset](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset).
-        """
-    )
-
-    with gr.Row():
-        instruction_box = gr.Textbox(
-            label="Customer Question",
-            placeholder="e.g. I was charged twice for my order. Can you help?",
-            lines=2,
-            scale=4,
-        )
-        submit_btn = gr.Button("Compare →", variant="primary", scale=1)
-
-    gr.Examples(
-        examples=[[p] for p in EXAMPLE_PROMPTS],
-        inputs=instruction_box,
-        label="Example questions (click to load)",
-    )
-
-    with gr.Row():
-        base_output = gr.Textbox(
-            label="Base Llama 3.2-3B (no fine-tuning)",
-            lines=8,
-            interactive=False,
-        )
-        ft_output = gr.Textbox(
-            label="Fine-tuned (Customer Support LoRA r=16)",
-            lines=8,
-            interactive=False,
-        )
-
-    # hidden state for feedback
-    base_state = gr.State("")
-    ft_state = gr.State("")
-
-    def on_compare(instruction):
-        base_resp, ft_resp, base_disp, ft_disp = compare(instruction)
-        return base_disp, ft_disp, base_resp, ft_resp
-
-    submit_btn.click(
-        fn=on_compare,
-        inputs=instruction_box,
-        outputs=[base_output, ft_output, base_state, ft_state],
-    )
-    instruction_box.submit(
-        fn=on_compare,
-        inputs=instruction_box,
-        outputs=[base_output, ft_output, base_state, ft_state],
-    )
-
-    gr.Markdown("### Which response was better?")
-    with gr.Row():
-        pref_base = gr.Button("👍 Base model was better")
-        pref_ft = gr.Button("👍 Fine-tuned was better")
-        pref_tie = gr.Button("🤝 About the same")
-
-    feedback_comment = gr.Textbox(
-        label="Any comments? (optional)",
-        placeholder="What was better or worse about either response?",
-    )
-    feedback_status = gr.Markdown("")
-
-    def make_feedback_fn(choice):
-        def fn(instruction, base_resp, ft_resp, comment):
-            msg = log_feedback(instruction, base_resp, ft_resp, choice, comment)
-            return msg
-        return fn
-
-    pref_base.click(
-        fn=make_feedback_fn("base"),
-        inputs=[instruction_box, base_state, ft_state, feedback_comment],
-        outputs=feedback_status,
-    )
-    pref_ft.click(
-        fn=make_feedback_fn("finetuned"),
-        inputs=[instruction_box, base_state, ft_state, feedback_comment],
-        outputs=feedback_status,
-    )
-    pref_tie.click(
-        fn=make_feedback_fn("tie"),
-        inputs=[instruction_box, base_state, ft_state, feedback_comment],
-        outputs=feedback_status,
-    )
 
     gr.Markdown(
         """
-        ---
-        **Project**: [GitHub](https://github.com/vamsiyvk/llm-finetuning-framework) |
-        **Author**: Vamsi YVK |
-        **Model trained on**: Bitext Customer Support Dataset (27K conversations, 27 intents)
+# 🤖 Customer Support LLM — Base vs Fine-tuned
+Fine-tuning **Llama 3.2-3B Instruct** on 27K real customer support conversations with **LoRA**.
+Pre-computed predictions from 100 held-out test examples — instant, no GPU needed.
         """
+    )
+
+    with gr.Tabs():
+
+        # ── Tab 1: side-by-side ────────────────────────────────────────────
+        with gr.Tab("🔍 Side-by-Side Comparison"):
+
+            with gr.Row():
+                intent_dd = gr.Dropdown(
+                    choices=INTENTS, value="All intents",
+                    label="Filter by intent", scale=3,
+                )
+                next_btn = gr.Button("🎲 Next example", variant="primary", scale=1)
+
+            badge_md = gr.Markdown("", elem_classes="badge")
+            question = gr.Textbox(
+                label="Customer question",
+                lines=2, interactive=False, elem_id="question",
+            )
+
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### ⬜ Base Llama 3.2-3B &nbsp;*(no fine-tuning)*")
+                    base_out = gr.Textbox(
+                        label="", lines=8, interactive=False, elem_id="base-out",
+                    )
+                with gr.Column():
+                    gr.Markdown("### 🟢 Fine-tuned r=64 &nbsp;*(LoRA, 200 steps)*")
+                    ft_out = gr.Textbox(
+                        label="", lines=8, interactive=False, elem_id="ft-out",
+                    )
+
+            with gr.Accordion("📖 Reference answer from dataset", open=False):
+                ref_out = gr.Textbox(
+                    label="", lines=3, interactive=False, elem_id="ref-out",
+                )
+
+            outputs = [question, base_out, ft_out, ref_out, badge_md]
+            next_btn.click(pick, inputs=intent_dd, outputs=outputs)
+            intent_dd.change(pick, inputs=intent_dd, outputs=outputs)
+            demo.load(pick, inputs=intent_dd, outputs=outputs)
+
+        # ── Tab 2: metrics ─────────────────────────────────────────────────
+        with gr.Tab("📊 Evaluation Metrics"):
+            gr.Markdown(METRICS_MD)
+
+        # ── Tab 3: about ───────────────────────────────────────────────────
+        with gr.Tab("ℹ️ About"):
+            gr.Markdown(ABOUT_MD)
+
+    gr.Markdown(
+        "Built by **Vamsi YVK** · "
+        "[GitHub](https://github.com/vamsiy2001/Customer_Support_AI-Fine_Tuning_Evaluation_Pipeline) · "
+        "[Dataset](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset)"
     )
 
 
 if __name__ == "__main__":
-    demo.launch(share=False)
+    demo.launch()
